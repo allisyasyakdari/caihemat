@@ -1,0 +1,117 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum WalletType {
+  BANK
+  E_WALLET
+  CASH
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+  TRANSFER
+}
+
+enum Scope {
+  PERSONAL
+  BUSINESS
+}
+
+enum NotificationStatus {
+  PENDING
+  PARSED
+  IGNORED
+  FAILED
+}
+
+model Wallet {
+  id              String        @id @default(uuid())
+  name            String
+  slug            String        @unique
+  type            WalletType
+  balance         Decimal       @default(0) @db.Decimal(15, 2)
+  accountNumber   String?       @map("account_number")
+  isActive        Boolean       @default(true) @map("is_active")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  transactions          Transaction[] @relation("SourceWallet")
+  incomingTransfers     Transaction[] @relation("DestinationWallet")
+  rawNotifications      RawNotification[]
+
+  @@map("wallets")
+}
+
+model Category {
+  id          String        @id @default(uuid())
+  name        String
+  type        TransactionType
+  scope       Scope
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  transactions Transaction[]
+
+  @@unique([name, scope, type])
+  @@map("categories")
+}
+
+model Transaction {
+  id                    String          @id @default(uuid())
+  walletId              String          @map("wallet_id")
+  destinationWalletId   String?         @map("destination_wallet_id")
+  categoryId            String?         @map("category_id")
+  type                  TransactionType
+  scope                 Scope           @default(PERSONAL)
+  amount                Decimal         @db.Decimal(15, 2)
+  adminFee              Decimal         @default(0) @map("admin_fee") @db.Decimal(15, 2)
+  description           String?
+  transactionDate       DateTime        @default(now()) @map("transaction_date")
+  
+  parentTransactionId   String?         @map("parent_transaction_id")
+  parentTransaction     Transaction?    @relation("LinkedAdminFee", fields: [parentTransactionId], references: [id], onDelete: Cascade)
+  childTransactions     Transaction[]   @relation("LinkedAdminFee")
+
+  createdAt             DateTime        @default(now()) @map("created_at")
+  updatedAt             DateTime        @updatedAt @map("updated_at")
+
+  wallet                Wallet          @relation("SourceWallet", fields: [walletId], references: [id])
+  destinationWallet     Wallet?         @relation("DestinationWallet", fields: [destinationWalletId], references: [id])
+  category              Category?       @relation(fields: [categoryId], references: [id])
+  rawNotification       RawNotification?
+
+  @@index([transactionDate])
+  @@index([scope])
+  @@index([type])
+  @@map("transactions")
+}
+
+model RawNotification {
+  id                  String             @id @default(uuid())
+  appName             String             @map("app_name")
+  notificationTitle   String             @map("notification_title")
+  notificationText    String             @map("notification_text")
+  rawPayload          Json               @map("raw_payload")
+  status              NotificationStatus @default(PENDING)
+  parsedAmount        Decimal?           @map("parsed_amount") @db.Decimal(15, 2)
+  errorMessage        String?            @map("error_message")
+  
+  walletId            String?            @map("wallet_id")
+  wallet              Wallet?            @relation(fields: [walletId], references: [id])
+  
+  transactionId       String?            @unique @map("transaction_id")
+  transaction         Transaction?       @relation(fields: [transactionId], references: [id])
+
+  receivedAt          DateTime           @map("received_at")
+  createdAt           DateTime           @default(now()) @map("created_at")
+
+  @@index([status])
+  @@map("raw_notifications")
+}
