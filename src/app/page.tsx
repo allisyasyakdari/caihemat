@@ -59,8 +59,8 @@ export default function DashboardPage() {
     try {
       setLoading(true);
       const [resWallets, resTx] = await Promise.all([
-        fetch("/api/wallets"),
-        fetch("/api/transactions"),
+        fetch("/api/wallets", { cache: "no-store" }),
+        fetch("/api/transactions", { cache: "no-store" }),
       ]);
       const dataWallets = await resWallets.json();
       const dataTx = await resTx.json();

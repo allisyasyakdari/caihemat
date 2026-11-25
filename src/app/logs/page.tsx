@@ -23,7 +23,7 @@ export default function WebhookLogsPage() {
   const fetchLogs = async () => {
     try {
       setLoading(true);
-      const res = await fetch("/api/raw-notifications");
+      const res = await fetch("/api/raw-notifications", { cache: "no-store" });
       const json = await res.json();
       if (json.success) setLogs(json.data);
     } catch (err) {

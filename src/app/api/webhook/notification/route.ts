@@ -50,42 +50,59 @@ function parseNotification(appName: string, title: string, text: string): ParseR
   let walletSlug = "";
   let isIncomeMatch = false;
 
-  if (normalizedApp.includes("DANA")) {
+  if (normalizedApp.includes("DANA") || fullContent.includes("dana")) {
     walletSlug = "dana";
     const danaIncomeKeywords = [
-      "menerima pembayaran",
-      "menerima saldo",
+      "pembayaran masuk",
+      "pembayaran",
+      "menerima",
+      "saldo",
       "berhasil transfer ke kamu",
       "dana bisnis",
-      "pembayaran qris berhasil",
+      "pembayaran qris",
       "terima uang",
+      "masuk",
+      "berhasil",
     ];
     isIncomeMatch = danaIncomeKeywords.some((kw) => fullContent.includes(kw));
-  } else if (normalizedApp.includes("SHOPEE")) {
+  } else if (normalizedApp.includes("SHOPEE") || fullContent.includes("shopee") || fullContent.includes("spay")) {
     walletSlug = "shopeepay";
     const shopeeIncomeKeywords = [
-      "qris berhasil diterima",
-      "telah ditambahkan ke saldomu",
-      "menerima transfer",
-      "transfer diterima",
-      "pembayaran berhasil diterima",
+      "pembayaran sebesar",
+      "diterima",
+      "qris",
+      "berhasil diterima",
+      "saldomu",
+      "menerima",
+      "transfer",
+      "pembayaran",
       "dana sebesar",
+      "isi saldo",
+      "top up",
+      "masuk",
+      "berhasil",
     ];
     isIncomeMatch = shopeeIncomeKeywords.some((kw) => fullContent.includes(kw));
-  } else if (normalizedApp.includes("GOPAY")) {
+  } else if (normalizedApp.includes("GOPAY") || fullContent.includes("gopay")) {
     walletSlug = "gopay";
-    const gopayIncomeKeywords = ["kamu menerima", "gopay masuk", "terima gopay", "qris berhasil"];
+    const gopayIncomeKeywords = ["menerima", "masuk", "terima", "qris", "berhasil", "top up"];
     isIncomeMatch = gopayIncomeKeywords.some((kw) => fullContent.includes(kw));
-  } else if (normalizedApp.includes("OVO")) {
+  } else if (normalizedApp.includes("OVO") || fullContent.includes("ovo")) {
     walletSlug = "ovo";
-    const ovoIncomeKeywords = ["top up berhasil", "transfer masuk", "kamu menerima"];
+    const ovoIncomeKeywords = ["top up", "transfer masuk", "menerima", "berhasil", "masuk"];
     isIncomeMatch = ovoIncomeKeywords.some((kw) => fullContent.includes(kw));
   } else {
-    return {
-      isSuccess: false,
-      isIgnored: true,
-      reason: `Unsupported app name: ${appName}`,
-    };
+    // Default fallback ke ShopeePay jika ada QRIS
+    if (fullContent.includes("qris") || fullContent.includes("pembayaran")) {
+      walletSlug = "shopeepay";
+      isIncomeMatch = true;
+    } else {
+      return {
+        isSuccess: false,
+        isIgnored: true,
+        reason: `Unsupported app name: ${appName}`,
+      };
+    }
   }
 
   if (!isIncomeMatch) {
@@ -96,15 +113,29 @@ function parseNotification(appName: string, title: string, text: string): ParseR
     };
   }
 
-  // 3. Regex Ekstraksi Nominal Rupiah
-  // Contoh yang didukung: "Rp25.000", "Rp 50.000", "Rp. 150.000", "Rp25.000,00", "IDR 50.000"
-  const rupiahRegex = /(?:rp\.?|idr)\s*([\d\.]+)(?:,\d{2})?/i;
-  const match = fullContent.match(rupiahRegex);
+  // 3. Regex Ekstraksi Nominal Rupiah (Mendukung dengan/tanpa tulisan "Rp")
+  // Prioritas 1: Ada label Rp / IDR (misal: "Rp25.000", "Rp 50.000", "Rp. 150.000")
+  let match = fullContent.match(/(?:rp\.?|idr)\s*([\d\.]+)(?:,\d{2})?/i);
+
+  // Prioritas 2: Mengikuti kata "sebesar" (misal: "pembayaran sebesar 25.000 diterima")
+  if (!match || !match[1]) {
+    match = fullContent.match(/sebesar\s+([\d\.]+)(?:,\d{2})?/i);
+  }
+
+  // Prioritas 3: Pola angka ribuan dengan titik (misal: "pembayaran masuk 25.000")
+  if (!match || !match[1]) {
+    match = fullContent.match(/(?:pembayaran|masuk|terima|qris)\s+.*?([\d]{1,3}(?:\.[\d]{3})+)/i);
+  }
+
+  // Prioritas 4: Setiap angka format ribuan Indonesia (misal: 25.000, 100.000, 1.500.000)
+  if (!match || !match[1]) {
+    match = fullContent.match(/([\d]{1,3}(?:\.[\d]{3})+)/);
+  }
 
   if (!match || !match[1]) {
     return {
       isSuccess: false,
-      reason: "Failed to extract currency amount via regex.",
+      reason: "Gagal mengekstrak nominal uang dari teks notifikasi.",
     };
   }
 
@@ -115,7 +146,7 @@ function parseNotification(appName: string, title: string, text: string): ParseR
   if (isNaN(parsedAmount) || parsedAmount <= 0) {
     return {
       isSuccess: false,
-      reason: `Invalid parsed amount value: ${cleanNumberStr}`,
+      reason: `Nilai nominal tidak valid: ${cleanNumberStr}`,
     };
   }
 
@@ -141,15 +172,17 @@ export async function POST(req: NextRequest) {
     }
 
     // 2. Baca Payload
-    const body: NotificationPayload = await req.json();
-    const { app_name, notification_title, notification_text, timestamp } = body;
-
-    if (!app_name || !notification_text) {
-      return NextResponse.json(
-        { success: false, message: "Bad Request: app_name and notification_text are required" },
-        { status: 400 }
-      );
+    let body: any = {};
+    try {
+      body = await req.json();
+    } catch (e) {
+      body = {};
     }
+
+    const app_name = body.app_name || body.appName || "Unknown";
+    const notification_title = body.notification_title || body.title || "";
+    const notification_text = body.notification_text || body.text || body.message || "";
+    const timestamp = body.timestamp;
 
     const receivedAtDate = timestamp ? new Date(Number(timestamp)) : new Date();
 
@@ -158,21 +191,23 @@ export async function POST(req: NextRequest) {
 
     // 4. Eksekusi Database (Prisma Transaction)
     const result = await prisma.$transaction(async (tx) => {
-      // Simpan log mentah terlebih dahulu
+      // Simpan log mentah terlebih dahulu agar SELALU terekam di /logs
       const rawLog = await tx.rawNotification.create({
         data: {
-          appName: app_name,
-          notificationTitle: notification_title || "",
-          notificationText: notification_text,
-          rawPayload: body as any,
+          appName: String(app_name),
+          notificationTitle: String(notification_title),
+          notificationText: String(notification_text || "(Pesan kosong)"),
+          rawPayload: body,
           receivedAt: receivedAtDate,
-          status: parseResult.isIgnored
+          status: !notification_text
+            ? NotificationStatus.FAILED
+            : parseResult.isIgnored
             ? NotificationStatus.IGNORED
             : parseResult.isSuccess
             ? NotificationStatus.PARSED
             : NotificationStatus.FAILED,
           parsedAmount: parseResult.amount ? parseResult.amount : null,
-          errorMessage: parseResult.reason || null,
+          errorMessage: !notification_text ? "Notification text is empty" : parseResult.reason || null,
         },
       });
 
