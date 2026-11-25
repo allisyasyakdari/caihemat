@@ -2,14 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { Scope, TransactionType, NotificationStatus } from "@prisma/client";
 
-const WEBHOOK_API_KEY = process.env.WEBHOOK_API_KEY || "financ3_secret_key_8148";
+export const dynamic = "force-dynamic";
 
-interface NotificationPayload {
-  app_name: string;
-  notification_title: string;
-  notification_text: string;
-  timestamp?: number | string;
-}
+const WEBHOOK_API_KEY = process.env.WEBHOOK_API_KEY || "financ3_secret_key_8148";
 
 interface ParseResult {
   isSuccess: boolean;
@@ -17,117 +12,81 @@ interface ParseResult {
   amount?: number;
   walletSlug?: string;
   reason?: string;
+  transactionType: TransactionType;
+  categoryName: string;
+  scope: Scope;
+  description?: string;
 }
 
 /**
- * Text & Regex Parser untuk notifikasi masuk dari DANA & Shopee / ShopeePay
+ * Smart Parser Engine untuk notifikasi Masuk & Keluar:
+ * - Masuk: QRIS Omzet Jualan (BUSINESS) atau Transfer Masuk
+ * - Keluar: Rumah Makan / Cafe -> "Makan & Minum", Grab/Gojek -> "Transportasi", Belanja -> "Belanja & Kebutuhan"
  */
 function parseNotification(appName: string, title: string, text: string): ParseResult {
   const normalizedApp = (appName || "").trim().toUpperCase();
   const fullContent = `${title || ""} ${text || ""}`.toLowerCase();
 
-  // 1. Deteksi transaksi pengeluaran (outbound) agar TIDAK tercatat sebagai omzet
+  // 1. Tentukan Dompet (Wallet)
+  let walletSlug = "dana";
+  if (normalizedApp.includes("DANA") || fullContent.includes("dana")) {
+    walletSlug = "dana";
+  } else if (normalizedApp.includes("SHOPEE") || fullContent.includes("shopee") || fullContent.includes("spay")) {
+    walletSlug = "shopeepay";
+  } else if (normalizedApp.includes("GOPAY") || fullContent.includes("gopay") || fullContent.includes("gojek")) {
+    walletSlug = "gopay";
+  } else if (normalizedApp.includes("OVO") || fullContent.includes("ovo")) {
+    walletSlug = "ovo";
+  } else if (normalizedApp.includes("BNI") || fullContent.includes("bni") || fullContent.includes("wondr")) {
+    walletSlug = "bni";
+  }
+
+  // 2. Deteksi Arah Transaksi: PENGELUARAN (OUTBOUND)
   const outboundKeywords = [
     "berhasil kirim",
     "pembayaran ke",
     "kamu telah membayar",
     "transaksi berhasil di merchant",
+    "berhasil di",
     "pembelian pulsa berhasil",
     "tagihan berhasil dibayar",
     "transfer keluar",
     "tarik tunai",
+    "pesanan selesai",
+    "perjalanan selesai",
+    "kamu telah menyelesaikan perjalanan",
+    "telah membayar",
+    "pembayaran berhasil",
   ];
 
-  if (outboundKeywords.some((kw) => fullContent.includes(kw))) {
-    return {
-      isSuccess: false,
-      isIgnored: true,
-      reason: "Outbound payment detected. Ignored for revenue webhook.",
-    };
-  }
+  const isOutbound = outboundKeywords.some((kw) => fullContent.includes(kw));
 
-  // 2. Tentukan Dompet dan Pola Uang Masuk
-  let walletSlug = "";
-  let isIncomeMatch = false;
+  // 3. Deteksi Arah Transaksi: PEMASUKAN (INBOUND)
+  const inboundKeywords = [
+    "pembayaran masuk",
+    "pembayaran sebesar",
+    "diterima",
+    "menerima pembayaran",
+    "menerima saldo",
+    "berhasil transfer ke kamu",
+    "dana bisnis",
+    "pembayaran qris",
+    "terima uang",
+    "masuk",
+    "telah ditambahkan ke saldomu",
+    "transfer diterima",
+  ];
 
-  if (normalizedApp.includes("DANA") || fullContent.includes("dana")) {
-    walletSlug = "dana";
-    const danaIncomeKeywords = [
-      "pembayaran masuk",
-      "pembayaran",
-      "menerima",
-      "saldo",
-      "berhasil transfer ke kamu",
-      "dana bisnis",
-      "pembayaran qris",
-      "terima uang",
-      "masuk",
-      "berhasil",
-    ];
-    isIncomeMatch = danaIncomeKeywords.some((kw) => fullContent.includes(kw));
-  } else if (normalizedApp.includes("SHOPEE") || fullContent.includes("shopee") || fullContent.includes("spay")) {
-    walletSlug = "shopeepay";
-    const shopeeIncomeKeywords = [
-      "pembayaran sebesar",
-      "diterima",
-      "qris",
-      "berhasil diterima",
-      "saldomu",
-      "menerima",
-      "transfer",
-      "pembayaran",
-      "dana sebesar",
-      "isi saldo",
-      "top up",
-      "masuk",
-      "berhasil",
-    ];
-    isIncomeMatch = shopeeIncomeKeywords.some((kw) => fullContent.includes(kw));
-  } else if (normalizedApp.includes("GOPAY") || fullContent.includes("gopay")) {
-    walletSlug = "gopay";
-    const gopayIncomeKeywords = ["menerima", "masuk", "terima", "qris", "berhasil", "top up"];
-    isIncomeMatch = gopayIncomeKeywords.some((kw) => fullContent.includes(kw));
-  } else if (normalizedApp.includes("OVO") || fullContent.includes("ovo")) {
-    walletSlug = "ovo";
-    const ovoIncomeKeywords = ["top up", "transfer masuk", "menerima", "berhasil", "masuk"];
-    isIncomeMatch = ovoIncomeKeywords.some((kw) => fullContent.includes(kw));
-  } else {
-    // Default fallback ke ShopeePay jika ada QRIS
-    if (fullContent.includes("qris") || fullContent.includes("pembayaran")) {
-      walletSlug = "shopeepay";
-      isIncomeMatch = true;
-    } else {
-      return {
-        isSuccess: false,
-        isIgnored: true,
-        reason: `Unsupported app name: ${appName}`,
-      };
-    }
-  }
+  const isInbound = inboundKeywords.some((kw) => fullContent.includes(kw));
 
-  if (!isIncomeMatch) {
-    return {
-      isSuccess: false,
-      isIgnored: true,
-      reason: "No incoming payment intent matched.",
-    };
-  }
-
-  // 3. Regex Ekstraksi Nominal Rupiah (Mendukung dengan/tanpa tulisan "Rp")
-  // Prioritas 1: Ada label Rp / IDR (misal: "Rp25.000", "Rp 50.000", "Rp. 150.000")
+  // 4. Regex Ekstraksi Nominal Rupiah (Mendukung ada/tanpa Rp)
   let match = fullContent.match(/(?:rp\.?|idr)\s*([\d\.]+)(?:,\d{2})?/i);
-
-  // Prioritas 2: Mengikuti kata "sebesar" (misal: "pembayaran sebesar 25.000 diterima")
   if (!match || !match[1]) {
     match = fullContent.match(/sebesar\s+([\d\.]+)(?:,\d{2})?/i);
   }
-
-  // Prioritas 3: Pola angka ribuan dengan titik (misal: "pembayaran masuk 25.000")
   if (!match || !match[1]) {
-    match = fullContent.match(/(?:pembayaran|masuk|terima|qris)\s+.*?([\d]{1,3}(?:\.[\d]{3})+)/i);
+    match = fullContent.match(/(?:pembayaran|masuk|terima|qris|total)\s+.*?([\d]{1,3}(?:\.[\d]{3})+)/i);
   }
-
-  // Prioritas 4: Setiap angka format ribuan Indonesia (misal: 25.000, 100.000, 1.500.000)
   if (!match || !match[1]) {
     match = fullContent.match(/([\d]{1,3}(?:\.[\d]{3})+)/);
   }
@@ -135,25 +94,116 @@ function parseNotification(appName: string, title: string, text: string): ParseR
   if (!match || !match[1]) {
     return {
       isSuccess: false,
-      reason: "Gagal mengekstrak nominal uang dari teks notifikasi.",
+      isIgnored: true,
+      reason: "Tidak ditemukan nominal uang (kemungkinan promo atau pesan info)",
+      transactionType: TransactionType.EXPENSE,
+      categoryName: "Lainnya",
+      scope: Scope.PERSONAL,
     };
   }
 
-  // Bersihkan pemisah ribuan titik (.)
   const cleanNumberStr = match[1].replace(/\./g, "");
   const parsedAmount = parseInt(cleanNumberStr, 10);
 
   if (isNaN(parsedAmount) || parsedAmount <= 0) {
     return {
       isSuccess: false,
-      reason: `Nilai nominal tidak valid: ${cleanNumberStr}`,
+      isIgnored: true,
+      reason: `Nominal tidak valid: ${cleanNumberStr}`,
+      transactionType: TransactionType.EXPENSE,
+      categoryName: "Lainnya",
+      scope: Scope.PERSONAL,
     };
   }
 
+  // 5. Klasifikasi Kategori Otomatis
+  // A. PENGELUARAN (EXPENSE - PERSONAL)
+  if (isOutbound || (!isInbound && (fullContent.includes("grab") || fullContent.includes("gojek")))) {
+    // A.1 Makan & Minum (F&B, Warung, Resto, Cafe, Bakso, Mie, dll)
+    const foodKeywords = [
+      "warung", "resto", "rumah makan", "rm ", "cafe", "kafe", "kopi", "coffee",
+      "bakso", "mie ", "mieayam", "soto", "nasi", "kitchen", "dapur", "food",
+      "mcd", "kfc", "burger", "pizza", "ayam", "geprek", "bebek", "seblak",
+      "martabak", "roti", "boba", "tea", "teh", "kedai", "snack", "kantin",
+      "jus", "juice", "steak", "angkringan", "pecel", "padang", "sate"
+    ];
+    if (foodKeywords.some((kw) => fullContent.includes(kw))) {
+      return {
+        isSuccess: true,
+        amount: parsedAmount,
+        walletSlug,
+        transactionType: TransactionType.EXPENSE,
+        categoryName: "Makan & Minum",
+        scope: Scope.PERSONAL,
+        description: `QRIS Makan & Minum: "${(title || text).substring(0, 80)}"`,
+      };
+    }
+
+    // A.2 Transportasi (Grab, Gojek, Maxim, Ojol, Bensin, Parkir, KAI, dll)
+    const transportKeywords = [
+      "grab", "gojek", "goride", "gocar", "grabbike", "grabcar", "maxim",
+      "indrive", "ojol", "transport", "parkir", "parking", "tol", "bensin",
+      "spbu", "pertamina", "shell", "kai", "kereta", "mrt", "transjakarta"
+    ];
+    if (transportKeywords.some((kw) => fullContent.includes(kw))) {
+      return {
+        isSuccess: true,
+        amount: parsedAmount,
+        walletSlug,
+        transactionType: TransactionType.EXPENSE,
+        categoryName: "Transportasi",
+        scope: Scope.PERSONAL,
+        description: `Transportasi: "${(title || text).substring(0, 80)}"`,
+      };
+    }
+
+    // A.3 Belanja & Kebutuhan (Indomaret, Alfamart, Toko, dll)
+    const shoppingKeywords = ["indomaret", "alfamart", "alfamidi", "supermarket", "hypermart", "toko", "store", "mall"];
+    if (shoppingKeywords.some((kw) => fullContent.includes(kw))) {
+      return {
+        isSuccess: true,
+        amount: parsedAmount,
+        walletSlug,
+        transactionType: TransactionType.EXPENSE,
+        categoryName: "Belanja & Kebutuhan",
+        scope: Scope.PERSONAL,
+        description: `Belanja: "${(title || text).substring(0, 80)}"`,
+      };
+    }
+
+    // Default Outbound
+    return {
+      isSuccess: true,
+      amount: parsedAmount,
+      walletSlug,
+      transactionType: TransactionType.EXPENSE,
+      categoryName: "Pengeluaran Pribadi",
+      scope: Scope.PERSONAL,
+      description: `Pengeluaran: "${(title || text).substring(0, 80)}"`,
+    };
+  }
+
+  // B. PEMASUKAN (INCOME - DEFAULT BUSINESS OMZET)
+  if (isInbound) {
+    return {
+      isSuccess: true,
+      amount: parsedAmount,
+      walletSlug,
+      transactionType: TransactionType.INCOME,
+      categoryName: "Penjualan QRIS",
+      scope: Scope.BUSINESS,
+      description: `QRIS Masuk: "${(title || text).substring(0, 80)}"`,
+    };
+  }
+
+  // C. Fallback Promo / Info Tidak Dikenal
   return {
-    isSuccess: true,
-    amount: parsedAmount,
-    walletSlug,
+    isSuccess: false,
+    isIgnored: true,
+    reason: "Pesan informasi atau promo diabaikan otomatis.",
+    transactionType: TransactionType.EXPENSE,
+    categoryName: "Lainnya",
+    scope: Scope.PERSONAL,
   };
 }
 
@@ -186,12 +236,12 @@ export async function POST(req: NextRequest) {
 
     const receivedAtDate = timestamp ? new Date(Number(timestamp)) : new Date();
 
-    // 3. Parsing Teks Notifikasi
+    // 3. Parsing Notifikasi
     const parseResult = parseNotification(app_name, notification_title, notification_text);
 
     // 4. Eksekusi Database (Prisma Transaction)
     const result = await prisma.$transaction(async (tx) => {
-      // Simpan log mentah terlebih dahulu agar SELALU terekam di /logs
+      // Simpan log mentah terlebih dahulu
       const rawLog = await tx.rawNotification.create({
         data: {
           appName: String(app_name),
@@ -199,19 +249,16 @@ export async function POST(req: NextRequest) {
           notificationText: String(notification_text || "(Pesan kosong)"),
           rawPayload: body,
           receivedAt: receivedAtDate,
-          status: !notification_text
-            ? NotificationStatus.FAILED
-            : parseResult.isIgnored
+          status: parseResult.isIgnored
             ? NotificationStatus.IGNORED
             : parseResult.isSuccess
             ? NotificationStatus.PARSED
             : NotificationStatus.FAILED,
           parsedAmount: parseResult.amount ? parseResult.amount : null,
-          errorMessage: !notification_text ? "Notification text is empty" : parseResult.reason || null,
+          errorMessage: parseResult.isIgnored ? parseResult.reason : parseResult.isSuccess ? null : parseResult.reason,
         },
       });
 
-      // Jika diabaikan / parsing gagal, cukup simpan log mentah
       if (!parseResult.isSuccess || !parseResult.amount || !parseResult.walletSlug) {
         return { rawLog, transaction: null };
       }
@@ -226,53 +273,56 @@ export async function POST(req: NextRequest) {
           where: { id: rawLog.id },
           data: {
             status: NotificationStatus.FAILED,
-            errorMessage: `Wallet '${parseResult.walletSlug}' not found in database.`,
+            errorMessage: `Wallet '${parseResult.walletSlug}' tidak ditemukan.`,
           },
         });
         return { rawLog, transaction: null };
       }
 
-      // Cari / buat kategori "Penjualan QRIS" (Scope: BUSINESS, Type: INCOME)
+      // Cari atau buat Category sesuai klasifikasi otomatis
       let category = await tx.category.findFirst({
         where: {
-          name: "Penjualan QRIS",
-          scope: Scope.BUSINESS,
-          type: TransactionType.INCOME,
+          name: parseResult.categoryName,
+          scope: parseResult.scope,
+          type: parseResult.transactionType,
         },
       });
 
       if (!category) {
         category = await tx.category.create({
           data: {
-            name: "Penjualan QRIS",
-            scope: Scope.BUSINESS,
-            type: TransactionType.INCOME,
+            name: parseResult.categoryName,
+            scope: parseResult.scope,
+            type: parseResult.transactionType,
           },
         });
       }
 
-      // Buat Transaksi Baru (Scope: BUSINESS, Type: INCOME)
+      // Buat Transaksi Baru
       const newTransaction = await tx.transaction.create({
         data: {
           walletId: wallet.id,
           categoryId: category.id,
-          type: TransactionType.INCOME,
-          scope: Scope.BUSINESS,
+          type: parseResult.transactionType,
+          scope: parseResult.scope,
           amount: parseResult.amount,
-          description: `Auto-recorded from ${app_name} QRIS: "${notification_text.substring(0, 100)}"`,
+          description: parseResult.description || `Auto-recorded from ${app_name}`,
           transactionDate: receivedAtDate,
         },
       });
 
-      // Update Saldo Wallet (Atomic Increment)
-      await tx.wallet.update({
-        where: { id: wallet.id },
-        data: {
-          balance: {
-            increment: parseResult.amount,
-          },
-        },
-      });
+      // Update Saldo Wallet (Atomic Increment / Decrement)
+      if (parseResult.transactionType === TransactionType.INCOME) {
+        await tx.wallet.update({
+          where: { id: wallet.id },
+          data: { balance: { increment: parseResult.amount } },
+        });
+      } else {
+        await tx.wallet.update({
+          where: { id: wallet.id },
+          data: { balance: { decrement: parseResult.amount } },
+        });
+      }
 
       // Hubungkan log mentah ke transaksi
       await tx.rawNotification.update({
@@ -289,13 +339,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         success: true,
-        message: parseResult.isSuccess
-          ? "Transaction recorded successfully"
-          : `Processed with status: ${parseResult.reason || "IGNORED"}`,
+        message: parseResult.isSuccess ? "Transaksi berhasil dicatat" : parseResult.reason || "Notifikasi diabaikan",
         data: {
           log_id: result.rawLog.id,
           transaction_id: result.transaction?.id || null,
           parsed_amount: parseResult.amount || null,
+          category: parseResult.categoryName,
+          type: parseResult.transactionType,
+          scope: parseResult.scope,
         },
       },
       { status: 200 }
