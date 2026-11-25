@@ -1,102 +1,641 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import {
-  Wallet,
-  ArrowUpRight,
-  ArrowDownLeft,
   ArrowLeftRight,
-  Building2,
+  BarChart3,
+  Briefcase,
+  Check,
+  Home,
+  Info,
+  ListChecks,
+  QrCode,
+  ShoppingBag,
+  Receipt,
   User,
-  RefreshCw,
-  TrendingUp,
-  PieChart as PieIcon,
-  BellRing,
-  CheckCircle2,
-  AlertCircle,
   Utensils,
   Car,
-  ShoppingBag,
-  SlidersHorizontal,
-  ChevronRight,
-  Layers,
-  Sparkles,
+  X,
+  Eye,
+  EyeOff,
+  Smartphone,
+  RefreshCw,
+  type LucideIcon,
 } from "lucide-react";
-import { CaihematLogo } from "@/components/CaihematLogo";
-import { DonutChart, ChartSegment } from "@/components/DonutChart";
 
-interface WalletItem {
+/* ───────────── Types & data ───────────── */
+type Scope = "BUSINESS" | "PERSONAL";
+type Kind = "income" | "expense" | "transfer";
+type CategoryId = "food" | "transport" | "shop" | "admin";
+type Tab = "home" | "analysis" | "transfer" | "logs";
+
+interface Wallet {
   id: string;
   name: string;
-  slug: string;
-  type: string;
-  balance: string | number;
+  slug?: string;
+  balance: number;
+  gradient: string;
 }
 
-interface TransactionItem {
-  id: string;
+interface Tx {
+  id: string | number;
+  title: string;
+  amount: number;
+  kind: Kind;
+  scope: Scope;
+  category?: CategoryId;
+  categoryName?: string;
   walletId: string;
-  destinationWalletId?: string;
-  type: "INCOME" | "EXPENSE" | "TRANSFER";
-  scope: "PERSONAL" | "BUSINESS";
-  amount: string | number;
-  adminFee: string | number;
-  description?: string;
-  transactionDate: string;
-  wallet: WalletItem;
-  destinationWallet?: WalletItem;
-  category?: { id: string; name: string };
+  time: string;
 }
 
-export default function MobileDashboardPage() {
-  // Splashscreen state
-  const [showSplash, setShowSplash] = useState(true);
+interface RawLog {
+  id: string;
+  appName: string;
+  notificationTitle: string;
+  notificationText: string;
+  status: "PENDING" | "PARSED" | "IGNORED" | "FAILED";
+  parsedAmount: number | null;
+  receivedAt: string;
+}
 
-  // App Navigation tab: "HOME" | "ANALYTICS" | "TRANSFER"
-  const [navTab, setNavTab] = useState<"HOME" | "ANALYTICS" | "TRANSFER">("HOME");
+const CATEGORIES: Record<CategoryId, { label: string; hint: string; color: string; icon: LucideIcon }> = {
+  food: { label: "Makan & Minum", hint: "Warung, Resto, Cafe", color: "#f97316", icon: Utensils },
+  transport: { label: "Transportasi", hint: "Grab, Gojek, Bensin", color: "#06b6d4", icon: Car },
+  shop: { label: "Belanja & Kebutuhan", hint: "Indomaret, Toko", color: "#8b5cf6", icon: ShoppingBag },
+  admin: { label: "Biaya Admin Transfer", hint: "Potongan transfer", color: "#ef4444", icon: Receipt },
+};
 
-  // Data states
-  const [wallets, setWallets] = useState<WalletItem[]>([]);
-  const [transactions, setTransactions] = useState<TransactionItem[]>([]);
-  const [scopeFilter, setScopeFilter] = useState<"ALL" | "BUSINESS" | "PERSONAL">("ALL");
+const WALLET_GRADIENTS: Record<string, string> = {
+  bni: "from-orange-400 to-amber-600",
+  dana: "from-sky-400 to-blue-600",
+  shopeepay: "from-orange-500 to-red-500",
+  gopay: "from-emerald-400 to-teal-600",
+  ovo: "from-violet-500 to-purple-700",
+};
+
+const rupiah = (n: number) => "Rp" + Math.round(n).toLocaleString("id-ID");
+
+/* ───────────── Logo ───────────── */
+function CaihematLogo({ size = 44 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 64" fill="none" aria-label="Logo Caihemat">
+      <defs>
+        <linearGradient id="chg" x1="6" y1="4" x2="58" y2="60" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#34d399" />
+          <stop offset=".55" stopColor="#14b8a6" />
+          <stop offset="1" stopColor="#22d3ee" />
+        </linearGradient>
+        <linearGradient id="chs" x1="0" y1="0" x2="1" y2="1">
+          <stop stopColor="#fff" stopOpacity=".7" />
+          <stop offset="1" stopColor="#fff" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      {/* wallet body */}
+      <rect x="6" y="18" width="52" height="38" rx="12" fill="url(#chg)" />
+      <rect x="6" y="18" width="52" height="19" rx="12" fill="url(#chs)" />
+      {/* flowing water */}
+      <path d="M13 40c5-5 9 5 14 0s9 5 14 0 7 3 10 0" stroke="#fff" strokeOpacity=".9" strokeWidth="3" strokeLinecap="round" />
+      <path d="M13 47c5-5 9 5 14 0s9 5 14 0 7 3 10 0" stroke="#fff" strokeOpacity=".45" strokeWidth="3" strokeLinecap="round" />
+      {/* droplet */}
+      <path d="M32 3c5 7 9 11 9 16a9 9 0 0 1-18 0c0-5 4-9 9-16z" fill="url(#chg)" stroke="#fff" strokeWidth="2.5" />
+      <ellipse cx="29" cy="16" rx="1.8" ry="3" fill="#fff" opacity=".8" transform="rotate(20 29 16)" />
+      {/* clasp */}
+      <circle cx="49" cy="30" r="3.2" fill="#fff" />
+    </svg>
+  );
+}
+
+/* ───────────── Splash ───────────── */
+function Splash() {
+  const [phase, setPhase] = useState<"show" | "fade" | "gone">("show");
+  useEffect(() => {
+    const a = setTimeout(() => setPhase("fade"), 1800);
+    const b = setTimeout(() => setPhase("gone"), 2500);
+    return () => {
+      clearTimeout(a);
+      clearTimeout(b);
+    };
+  }, []);
+  if (phase === "gone") return null;
+  return (
+    <div
+      className={`fixed inset-0 z-[100] flex flex-col items-center justify-center bg-gradient-to-br from-emerald-600 via-teal-600 to-cyan-600 transition-opacity duration-700 ${
+        phase === "fade" ? "opacity-0" : "opacity-100"
+      }`}
+    >
+      <div className="absolute h-64 w-64 rounded-full bg-white/10 blur-3xl animate-pulse" />
+      <div className="relative animate-[chSplash_1s_cubic-bezier(.2,.9,.3,1.2)_both]">
+        <div className="rounded-[28px] bg-white/15 p-5 shadow-2xl ring-1 ring-white/30 backdrop-blur-xl">
+          <CaihematLogo size={72} />
+        </div>
+      </div>
+      <h1 className="mt-6 text-3xl font-bold tracking-tight text-white animate-[chRise_.9s_.35s_both]">Caihemat</h1>
+      <p className="mt-1 text-sm text-emerald-50/80 animate-[chRise_.9s_.55s_both]">Personal & Business Tracker</p>
+    </div>
+  );
+}
+
+/* ───────────── Hero ───────────── */
+function HeroCard({ total, omzet, personal }: { total: number; omzet: number; personal: number }) {
+  const [hidden, setHidden] = useState(false);
+  const show = (n: number) => (hidden ? "Rp ••••••" : rupiah(n));
+  return (
+    <section className="relative overflow-hidden rounded-[28px] bg-gradient-to-br from-emerald-500 via-teal-600 to-cyan-700 p-5 text-white shadow-xl shadow-teal-900/20">
+      <div className="pointer-events-none absolute -right-10 -top-12 h-44 w-44 rounded-full bg-white/20 blur-2xl" />
+      <div className="pointer-events-none absolute -bottom-16 -left-10 h-44 w-44 rounded-full bg-cyan-300/30 blur-3xl" />
+      <div className="relative flex items-center justify-between">
+        <p className="text-sm text-emerald-50/90">Total saldo riil</p>
+        <button
+          onClick={() => setHidden((h) => !h)}
+          aria-label="Sembunyikan saldo"
+          className="rounded-full bg-white/15 p-2 backdrop-blur transition active:scale-90"
+        >
+          {hidden ? <EyeOff size={16} /> : <Eye size={16} />}
+        </button>
+      </div>
+      <p className="relative mt-1 text-[34px] font-bold leading-tight tracking-tight">{show(total)}</p>
+      <p className="relative text-xs text-emerald-50/80">Gabungan semua dompet</p>
+
+      <div className="relative mt-5 grid grid-cols-2 gap-3">
+        <div className="rounded-2xl bg-white/15 p-3 ring-1 ring-white/25 backdrop-blur-md transition active:scale-95">
+          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-300/30 px-2 py-0.5 text-[10px] font-semibold text-emerald-50">
+            <Briefcase size={10} /> BUSINESS
+          </span>
+          <p className="mt-2 text-[11px] text-emerald-50/80">Omzet Jualan (QRIS)</p>
+          <p className="text-base font-semibold">{show(omzet)}</p>
+        </div>
+        <div className="rounded-2xl bg-white/15 p-3 ring-1 ring-white/25 backdrop-blur-md transition active:scale-95">
+          <span className="inline-flex items-center gap-1 rounded-full bg-amber-300/40 px-2 py-0.5 text-[10px] font-semibold text-amber-50">
+            <User size={10} /> PERSONAL
+          </span>
+          <p className="mt-2 text-[11px] text-emerald-50/80">Pengeluaran Pribadi</p>
+          <p className="text-base font-semibold">{show(personal)}</p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ───────────── Wallets ───────────── */
+function WalletSlider({ wallets }: { wallets: Wallet[] }) {
+  return (
+    <section>
+      <h2 className="mb-3 px-1 text-sm font-semibold text-slate-700">Dompet saya</h2>
+      <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {wallets.map((w) => (
+          <div
+            key={w.id}
+            className={`relative h-28 w-40 shrink-0 snap-start overflow-hidden rounded-2xl bg-gradient-to-br ${w.gradient} p-3 text-white shadow-lg transition active:scale-95`}
+          >
+            <div className="absolute -right-6 -top-6 h-20 w-20 rounded-full bg-white/20" />
+            <p className="relative text-xs font-medium text-white/90 truncate">{w.name}</p>
+            <p className="relative mt-9 text-lg font-bold tracking-tight">{rupiah(w.balance)}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/* ───────────── Donut ───────────── */
+function DonutChart({ txs }: { txs: Tx[] }) {
+  const [active, setActive] = useState<CategoryId | null>(null);
+  const data = useMemo(() => {
+    const sums: Record<CategoryId, number> = { food: 0, transport: 0, shop: 0, admin: 0 };
+    txs.forEach((t) => {
+      if (t.kind === "expense" && t.scope === "PERSONAL" && t.category && sums[t.category] !== undefined) {
+        sums[t.category] += t.amount;
+      }
+    });
+    const total = Object.values(sums).reduce((a, b) => a + b, 0);
+    return { sums, total };
+  }, [txs]);
+
+  const R = 70,
+    C = 2 * Math.PI * R;
+  let offset = 0;
+  const ids = Object.keys(CATEGORIES) as CategoryId[];
+
+  return (
+    <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-100">
+      <h2 className="text-sm font-semibold text-slate-700">Pengeluaran bulan ini</h2>
+      <div className="relative mx-auto mt-4 h-52 w-52">
+        <svg viewBox="0 0 200 200" className="-rotate-90">
+          <circle cx="100" cy="100" r={R} fill="none" stroke="#f1f5f9" strokeWidth="26" />
+          {data.total > 0 &&
+            ids.map((id) => {
+              const len = (data.sums[id] / data.total) * C;
+              const el = (
+                <circle
+                  key={id}
+                  cx="100"
+                  cy="100"
+                  r={R}
+                  fill="none"
+                  stroke={CATEGORIES[id].color}
+                  strokeWidth={active === id ? 34 : 26}
+                  strokeDasharray={`${Math.max(len - 3, 0)} ${C}`}
+                  strokeDashoffset={-offset}
+                  strokeLinecap="round"
+                  className="cursor-pointer transition-all duration-300"
+                  opacity={active && active !== id ? 0.35 : 1}
+                  onMouseEnter={() => setActive(id)}
+                  onMouseLeave={() => setActive(null)}
+                  onClick={() => setActive(active === id ? null : id)}
+                />
+              );
+              offset += len;
+              return el;
+            })}
+        </svg>
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
+          <p className="max-w-[90px] text-[11px] leading-tight text-slate-500">
+            {active ? CATEGORIES[active].label : "Total"}
+          </p>
+          <p className="text-lg font-bold text-slate-800">{rupiah(active ? data.sums[active] : data.total)}</p>
+          {active && (
+            <p className="text-xs font-semibold" style={{ color: CATEGORIES[active].color }}>
+              {Math.round((data.sums[active] / data.total) * 100)}%
+            </p>
+          )}
+        </div>
+      </div>
+
+      <ul className="mt-4 space-y-1">
+        {ids.map((id) => {
+          const c = CATEGORIES[id];
+          const pct = data.total ? Math.round((data.sums[id] / data.total) * 100) : 0;
+          return (
+            <li key={id}>
+              <button
+                onClick={() => setActive(active === id ? null : id)}
+                className={`flex w-full items-center gap-3 rounded-xl p-2 text-left transition active:scale-[.98] ${
+                  active === id ? "bg-slate-50" : ""
+                }`}
+              >
+                <span className="grid h-9 w-9 place-items-center rounded-xl text-white shrink-0" style={{ background: c.color }}>
+                  <c.icon size={16} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium text-slate-800">{c.label}</span>
+                  <span className="block truncate text-[11px] text-slate-400">{c.hint}</span>
+                </span>
+                <span className="text-right shrink-0">
+                  <span className="block text-sm font-semibold text-slate-800">{pct}%</span>
+                  <span className="block text-[11px] text-slate-400">{rupiah(data.sums[id])}</span>
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+/* ───────────── Transactions + Smart QRIS Classifier ───────────── */
+function TxRow({ tx, walletName, onToggle }: { tx: Tx; walletName: string; onToggle: (id: string | number) => void }) {
+  const isIncome = tx.kind === "income";
+  const isTransfer = tx.kind === "transfer";
+  const cat = tx.category ? CATEGORIES[tx.category] : null;
+  const Icon = isTransfer ? ArrowLeftRight : isIncome ? QrCode : cat?.icon ?? Receipt;
+  const biz = tx.scope === "BUSINESS";
+
+  return (
+    <li className="animate-[chRise_.4s_both] rounded-2xl bg-white p-3 shadow-sm ring-1 ring-slate-100">
+      <div className="flex items-center gap-3">
+        <span
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-white"
+          style={{ background: isIncome ? "#10b981" : isTransfer ? "#64748b" : cat?.color || "#f59e0b" }}
+        >
+          <Icon size={18} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-slate-800">{tx.title}</p>
+          <p className="truncate text-[11px] text-slate-400">
+            {walletName} • {tx.time}
+          </p>
+        </div>
+        <p className={`text-sm font-semibold shrink-0 ${isIncome ? "text-emerald-600" : "text-slate-800"}`}>
+          {isIncome ? "+" : "-"}
+          {rupiah(tx.amount)}
+        </p>
+      </div>
+      {!isTransfer && (
+        <button
+          onClick={() => onToggle(tx.id)}
+          aria-label="Ubah status transaksi"
+          className={`mt-2 flex w-full items-center justify-between rounded-xl px-3 py-1.5 text-xs font-semibold transition-all duration-300 active:scale-95 ${
+            biz ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
+          }`}
+        >
+          <span className="flex items-center gap-1.5">
+            {biz ? <Briefcase size={13} /> : <User size={13} />}
+            {biz ? "💼 Omzet Jualan" : "👤 Uang Pribadi"}
+          </span>
+          <span className="flex items-center gap-1 opacity-70">
+            Ubah <ArrowLeftRight size={12} />
+          </span>
+        </button>
+      )}
+    </li>
+  );
+}
+
+function TxList({
+  txs,
+  wallets,
+  onToggle,
+  limit,
+}: {
+  txs: Tx[];
+  wallets: Wallet[];
+  onToggle: (id: string | number) => void;
+  limit?: number;
+}) {
+  const [filter, setFilter] = useState<"ALL" | Scope>("ALL");
+  const list = txs
+    .filter((t) => filter === "ALL" || t.scope === filter || (t.kind === "transfer" && filter === "ALL"))
+    .slice(0, limit);
+  const tabs: { id: "ALL" | Scope; label: string }[] = [
+    { id: "ALL", label: "Semua" },
+    { id: "BUSINESS", label: "Omzet" },
+    { id: "PERSONAL", label: "Pribadi" },
+  ];
+
+  return (
+    <section>
+      <div className="mb-3 flex items-center justify-between px-1">
+        <h2 className="text-sm font-semibold text-slate-700">Riwayat transaksi</h2>
+        <div className="flex rounded-full bg-slate-200/70 p-0.5">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setFilter(t.id)}
+              className={`rounded-full px-3 py-1 text-[11px] font-semibold transition ${
+                filter === t.id ? "bg-white text-slate-800 shadow-sm" : "text-slate-500"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <ul className="space-y-2">
+        {list.map((t) => (
+          <TxRow
+            key={t.id}
+            tx={t}
+            onToggle={onToggle}
+            walletName={wallets.find((w) => w.id === t.walletId || w.slug === t.walletId)?.name ?? "Dompet"}
+          />
+        ))}
+        {list.length === 0 && (
+          <li className="rounded-2xl bg-white p-6 text-center text-sm text-slate-400">
+            Belum ada transaksi di kategori ini.
+          </li>
+        )}
+      </ul>
+    </section>
+  );
+}
+
+/* ───────────── Transfer Bottom Sheet ───────────── */
+function TransferSheet({
+  open,
+  wallets,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean;
+  wallets: Wallet[];
+  onClose: () => void;
+  onSubmit: (from: string, to: string, amount: number, fee: number) => void;
+}) {
+  const [from, setFrom] = useState(wallets[0]?.id || "bni");
+  const [to, setTo] = useState(wallets[1]?.id || "dana");
+  const [amount, setAmount] = useState("");
+  const [fee, setFee] = useState("1500");
+
+  const amt = Number(amount) || 0;
+  const f = Number(fee) || 0;
+  const src = wallets.find((w) => w.id === from);
+  const error =
+    from === to
+      ? "Dompet asal dan tujuan tidak boleh sama."
+      : amt <= 0
+      ? ""
+      : src && amt + f > src.balance
+      ? "Saldo dompet asal tidak cukup."
+      : "";
+  const valid = amt > 0 && !error;
+
+  const field =
+    "w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-800 outline-none transition focus:border-teal-500 focus:bg-white focus:ring-4 focus:ring-teal-500/10";
+
+  return (
+    <div className={`fixed inset-0 z-50 ${open ? "" : "pointer-events-none"}`}>
+      <div
+        onClick={onClose}
+        className={`absolute inset-0 bg-slate-900/50 backdrop-blur-sm transition-opacity duration-300 ${
+          open ? "opacity-100" : "opacity-0"
+        }`}
+      />
+      <div
+        className={`absolute bottom-0 left-1/2 w-full max-w-md -translate-x-1/2 rounded-t-[28px] bg-white p-5 pb-8 shadow-2xl transition-transform duration-300 ease-out ${
+          open ? "translate-y-0" : "translate-y-full"
+        }`}
+      >
+        <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-slate-200" />
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-bold text-slate-800">Transfer antar akun</h3>
+          <button
+            onClick={onClose}
+            aria-label="Tutup"
+            className="rounded-full bg-slate-100 p-2 text-slate-500 transition active:scale-90"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block text-xs font-medium text-slate-500">
+              Dari
+              <select value={from} onChange={(e) => setFrom(e.target.value)} className={`${field} mt-1`}>
+                {wallets.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-xs font-medium text-slate-500">
+              Ke
+              <select value={to} onChange={(e) => setTo(e.target.value)} className={`${field} mt-1`}>
+                {wallets.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {src && (
+            <p className="px-1 text-[11px] text-slate-400">
+              Saldo {src.name}: {rupiah(src.balance)}
+            </p>
+          )}
+          <label className="block text-xs font-medium text-slate-500">
+            Nominal (Rp)
+            <input
+              inputMode="numeric"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))}
+              placeholder="0"
+              className={`${field} mt-1 text-lg font-semibold`}
+            />
+          </label>
+          <label className="block text-xs font-medium text-slate-500">
+            Biaya admin (Rp)
+            <input
+              inputMode="numeric"
+              value={fee}
+              onChange={(e) => setFee(e.target.value.replace(/\D/g, ""))}
+              placeholder="0"
+              className={`${field} mt-1`}
+            />
+          </label>
+          <div className="flex gap-2 rounded-2xl bg-amber-50 p-3 text-xs text-amber-800 ring-1 ring-amber-100">
+            <Info size={16} className="mt-0.5 shrink-0" />
+            <p>
+              Biaya admin otomatis dipotong dari dompet asal dan dicatat sebagai <b>Pengeluaran Pribadi</b> (Expense)
+              kategori <b>“Biaya Admin”</b>.
+            </p>
+          </div>
+          {error && <p className="px-1 text-xs font-medium text-red-500">{error}</p>}
+          <button
+            disabled={!valid}
+            onClick={() => onSubmit(from, to, amt, f)}
+            className="w-full rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 py-3.5 text-sm font-semibold text-white shadow-lg shadow-teal-500/30 transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
+          >
+            Transfer sekarang
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ───────────── Bottom Nav ───────────── */
+function BottomNav({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
+  const items: { id: Tab; label: string; icon: LucideIcon }[] = [
+    { id: "home", label: "Home", icon: Home },
+    { id: "analysis", label: "Analisis", icon: BarChart3 },
+    { id: "transfer", label: "Transfer", icon: ArrowLeftRight },
+    { id: "logs", label: "Logs", icon: ListChecks },
+  ];
+  return (
+    <nav className="fixed bottom-0 left-1/2 z-40 w-full max-w-md -translate-x-1/2 border-t border-slate-200/70 bg-white/80 px-4 pb-[max(env(safe-area-inset-bottom),8px)] pt-2 backdrop-blur-xl">
+      <ul className="grid grid-cols-4">
+        {items.map(({ id, label, icon: Icon }) => {
+          const on = tab === id;
+          return (
+            <li key={id}>
+              <button
+                onClick={() => onChange(id)}
+                className="group flex w-full flex-col items-center gap-0.5 py-1 transition active:scale-90"
+              >
+                <span
+                  className={`grid h-8 w-12 place-items-center rounded-full transition-all duration-300 ${
+                    on
+                      ? "bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-md shadow-teal-500/30"
+                      : "text-slate-400 group-hover:text-slate-600"
+                  }`}
+                >
+                  <Icon size={20} />
+                </span>
+                <span className={`text-[10px] font-medium ${on ? "text-teal-700" : "text-slate-400"}`}>{label}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
+  );
+}
+
+/* ───────────── Page Component with Live Supabase Backend ───────────── */
+export default function CaihematDashboard() {
+  const [tab, setTab] = useState<Tab>("home");
+  const [sheet, setSheet] = useState(false);
+  const [wallets, setWallets] = useState<Wallet[]>([]);
+  const [txs, setTxs] = useState<Tx[]>([]);
+  const [rawLogs, setRawLogs] = useState<RawLog[]>([]);
+  const [toast, setToast] = useState("");
   const [loading, setLoading] = useState(true);
 
-  // Re-classify Modal
-  const [selectedTx, setSelectedTx] = useState<TransactionItem | null>(null);
-  const [isUpdatingScope, setIsUpdatingScope] = useState(false);
-
-  // Transfer Form State
-  const [transferSource, setTransferSource] = useState("");
-  const [transferDest, setTransferDest] = useState("");
-  const [transferAmount, setTransferAmount] = useState("");
-  const [transferFee, setTransferFee] = useState("0");
-  const [transferNote, setTransferNote] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [message, setMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
-
-  // Auto-dismiss Splashscreen
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowSplash(false);
-    }, 1200);
-    return () => clearTimeout(timer);
-  }, []);
+  // Helper mapping kategori DB ke CategoryId UI
+  const mapDbCategoryToId = (catName?: string): CategoryId | undefined => {
+    const l = (catName || "").toLowerCase();
+    if (l.includes("makan") || l.includes("minum") || l.includes("resto") || l.includes("cafe")) return "food";
+    if (l.includes("transport") || l.includes("grab") || l.includes("gojek")) return "transport";
+    if (l.includes("belanja") || l.includes("indomaret") || l.includes("toko")) return "shop";
+    if (l.includes("admin")) return "admin";
+    return undefined;
+  };
 
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [resWallets, resTx] = await Promise.all([
+      const [resWallets, resTx, resLogs] = await Promise.all([
         fetch("/api/wallets", { cache: "no-store" }),
         fetch("/api/transactions", { cache: "no-store" }),
+        fetch("/api/raw-notifications", { cache: "no-store" }),
       ]);
+
       const dataWallets = await resWallets.json();
       const dataTx = await resTx.json();
+      const dataLogs = await resLogs.json();
 
-      if (dataWallets.success) setWallets(dataWallets.data);
-      if (dataTx.success) setTransactions(dataTx.data);
+      if (dataWallets.success && dataWallets.data?.length > 0) {
+        setWallets(
+          dataWallets.data.map((w: any) => ({
+            id: w.id,
+            name: w.name,
+            slug: w.slug,
+            balance: Number(w.balance || 0),
+            gradient: WALLET_GRADIENTS[w.slug] || "from-slate-600 to-slate-800",
+          }))
+        );
+      }
+
+      if (dataTx.success && dataTx.data?.length > 0) {
+        setTxs(
+          dataTx.data.map((t: any) => ({
+            id: t.id,
+            title: t.description || (t.type === "TRANSFER" ? `Transfer ➔ ${t.destinationWallet?.name}` : t.category?.name || "Transaksi"),
+            amount: Number(t.amount || 0),
+            kind: t.type === "INCOME" ? "income" : t.type === "EXPENSE" ? "expense" : "transfer",
+            scope: t.scope as Scope,
+            category: mapDbCategoryToId(t.category?.name),
+            categoryName: t.category?.name,
+            walletId: t.walletId,
+            time: new Date(t.transactionDate).toLocaleDateString("id-ID", {
+              day: "numeric",
+              month: "short",
+              hour: "2-digit",
+              minute: "2-digit",
+            }),
+          }))
+        );
+      }
+
+      if (dataLogs.success && dataLogs.data) {
+        setRawLogs(dataLogs.data);
+      }
     } catch (err) {
-      console.error("Fetch error:", err);
+      console.error("Fetch data error:", err);
     } finally {
       setLoading(false);
     }
@@ -106,704 +645,206 @@ export default function MobileDashboardPage() {
     fetchData();
   }, []);
 
-  // Quick 1-Click Toggle Scope (Business ⇄ Personal)
-  const handleToggleScope = async (tx: TransactionItem) => {
-    setIsUpdatingScope(true);
-    const newScope = tx.scope === "BUSINESS" ? "PERSONAL" : "BUSINESS";
+  const total = wallets.reduce((a, w) => a + w.balance, 0);
+  const omzet = txs
+    .filter((t) => t.kind === "income" && t.scope === "BUSINESS")
+    .reduce((a, t) => a + t.amount, 0);
+  const personal = txs
+    .filter((t) => t.kind === "expense" && t.scope === "PERSONAL")
+    .reduce((a, t) => a + t.amount, 0);
+
+  // Live 1-Click Toggle Scope (Business ⇄ Personal) with Supabase Sync
+  const toggleScope = async (id: string | number) => {
+    const tx = txs.find((t) => t.id === id);
+    if (!tx) return;
+    const newScope: Scope = tx.scope === "BUSINESS" ? "PERSONAL" : "BUSINESS";
     const newCategoryName = newScope === "BUSINESS" ? "Penjualan QRIS" : "Uang Masuk Pribadi";
 
+    // Optimistic UI update
+    setTxs((p) => p.map((t) => (t.id === id ? { ...t, scope: newScope } : t)));
+
     try {
-      const res = await fetch("/api/transactions", {
+      await fetch("/api/transactions", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          id: tx.id,
+          id,
           scope: newScope,
           category_name: newCategoryName,
         }),
       });
-      const json = await res.json();
-      if (json.success) {
-        setMessage({
-          text: `Transaksi berhasil diubah menjadi: ${newScope === "BUSINESS" ? "Omzet Jualan 💼" : "Pribadi 👤"}`,
-          type: "success",
-        });
-        setSelectedTx(null);
-        fetchData();
-      }
+      setToast(`Diubah ke: ${newScope === "BUSINESS" ? "Omzet Jualan 💼" : "Uang Pribadi 👤"}`);
+      setTimeout(() => setToast(""), 2000);
+      fetchData();
     } catch (e: any) {
-      setMessage({ text: e.message || "Gagal mengubah kategori", type: "error" });
-    } finally {
-      setIsUpdatingScope(false);
+      setToast("Gagal update status");
+      setTimeout(() => setToast(""), 2000);
     }
   };
 
-  // Ubah Kategori Khusus
-  const handleChangeCategory = async (categoryName: string) => {
-    if (!selectedTx) return;
-    setIsUpdatingScope(true);
-    try {
-      const res = await fetch("/api/transactions", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: selectedTx.id,
-          category_name: categoryName,
-        }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        setMessage({ text: `Kategori diubah ke "${categoryName}"!`, type: "success" });
-        setSelectedTx(null);
-        fetchData();
-      }
-    } catch (e: any) {
-      setMessage({ text: e.message, type: "error" });
-    } finally {
-      setIsUpdatingScope(false);
-    }
+  const handleTab = (t: Tab) => {
+    if (t === "transfer") setSheet(true);
+    else setTab(t);
   };
 
-  // Submit Transfer
-  const handleTransfer = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSubmitting(true);
-    setMessage(null);
-
+  // Live Transfer Execution with Supabase Sync & Auto-Admin Expense
+  const doTransfer = async (from: string, to: string, amount: number, fee: number) => {
     try {
       const res = await fetch("/api/transfer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          source_wallet_id: transferSource,
-          destination_wallet_id: transferDest,
-          amount: parseFloat(transferAmount),
-          admin_fee: parseFloat(transferFee || "0"),
-          description: transferNote || "Transfer Antar Akun",
+          source_wallet_id: from,
+          destination_wallet_id: to,
+          amount,
+          admin_fee: fee,
+          description: "Transfer Antar Akun",
         }),
       });
 
       const json = await res.json();
       if (json.success) {
-        setMessage({ text: "Transfer berhasil & biaya admin otomatis tercatat!", type: "success" });
-        setTransferAmount("");
-        setTransferFee("0");
-        setTransferNote("");
-        setNavTab("HOME");
+        setSheet(false);
+        setToast("Transfer berhasil dicatat beserta biaya admin!");
+        setTimeout(() => setToast(""), 2500);
         fetchData();
       } else {
-        setMessage({ text: json.message || "Gagal transfer", type: "error" });
+        setToast(json.message || "Gagal transfer");
+        setTimeout(() => setToast(""), 2500);
       }
     } catch (err: any) {
-      setMessage({ text: err.message, type: "error" });
-    } finally {
-      setIsSubmitting(false);
+      setToast(err.message || "Gagal transfer");
+      setTimeout(() => setToast(""), 2500);
     }
   };
 
-  // Kalkulasi Keuangan
-  const totalBalance = wallets.reduce((acc, w) => acc + Number(w.balance || 0), 0);
-  const totalBusinessIncome = transactions
-    .filter((t) => t.scope === "BUSINESS" && t.type === "INCOME")
-    .reduce((acc, t) => acc + Number(t.amount || 0), 0);
-  const totalBusinessExpense = transactions
-    .filter((t) => t.scope === "BUSINESS" && t.type === "EXPENSE")
-    .reduce((acc, t) => acc + Number(t.amount || 0), 0);
-  const totalPersonalExpense = transactions
-    .filter((t) => t.scope === "PERSONAL" && t.type === "EXPENSE")
-    .reduce((acc, t) => acc + Number(t.amount || 0), 0);
-
-  // Donut Chart Segments (Kategori Pengeluaran Pribadi & Usaha)
-  const expenseTransactions = transactions.filter((t) => t.type === "EXPENSE");
-  const totalExpenses = expenseTransactions.reduce((acc, t) => acc + Number(t.amount || 0), 0);
-
-  const categoryTotals: { [key: string]: number } = {};
-  expenseTransactions.forEach((t) => {
-    const catName = t.category?.name || "Lain-lain";
-    categoryTotals[catName] = (categoryTotals[catName] || 0) + Number(t.amount || 0);
-  });
-
-  const categoryColorPalette: { [key: string]: string } = {
-    "Makan & Minum": "#f97316", // Orange
-    "Transportasi": "#06b6d4", // Cyan
-    "Biaya Admin": "#ef4444", // Red
-    "Belanja & Kebutuhan": "#8b5cf6", // Purple
-    "Operasional Usaha": "#3b82f6", // Blue
-    "Pengeluaran Pribadi": "#10b981", // Emerald
-    "Lain-lain": "#64748b", // Slate
-  };
-
-  const chartSegments: ChartSegment[] = Object.keys(categoryTotals).map((name) => {
-    const amount = categoryTotals[name];
-    const percentage = totalExpenses > 0 ? (amount / totalExpenses) * 100 : 0;
-    return {
-      name,
-      amount,
-      color: categoryColorPalette[name] || "#14b8a6",
-      percentage,
-    };
-  }).sort((a, b) => b.amount - a.amount);
-
-  const filteredTransactions = transactions.filter((t) => {
-    if (scopeFilter === "ALL") return true;
-    return t.scope === scopeFilter;
-  });
-
-  const formatIDR = (val: number | string) => {
-    const num = Number(val || 0);
-    return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(num);
-  };
-
-  const getCategoryIcon = (name?: string) => {
-    const lower = (name || "").toLowerCase();
-    if (lower.includes("makan") || lower.includes("minum") || lower.includes("resto")) return <Utensils className="w-4 h-4 text-orange-500" />;
-    if (lower.includes("transport") || lower.includes("grab") || lower.includes("gojek")) return <Car className="w-4 h-4 text-cyan-500" />;
-    if (lower.includes("belanja") || lower.includes("indomaret")) return <ShoppingBag className="w-4 h-4 text-purple-500" />;
-    return <Layers className="w-4 h-4 text-slate-500" />;
-  };
-
   return (
-    <>
-      {/* 1. ANIMATED SPLASHSCREEN */}
-      {showSplash && (
-        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-gradient-to-b from-emerald-950 via-slate-900 to-slate-950 text-white transition-opacity duration-500 ease-out">
-          <div className="relative animate-pulse">
-            <div className="absolute -inset-4 bg-emerald-500/30 rounded-full blur-xl" />
-            <CaihematLogo size={72} className="relative shadow-2xl" />
-          </div>
-          <h1 className="text-2xl font-black tracking-tight mt-6 bg-gradient-to-r from-emerald-400 to-cyan-300 bg-clip-text text-transparent">
-            Caihemat
-          </h1>
-          <p className="text-xs text-emerald-300/80 mt-1 font-medium">Personal & Business Tracker</p>
-          <div className="w-32 h-1 bg-slate-800 rounded-full overflow-hidden mt-8">
-            <div className="h-full bg-emerald-500 rounded-full animate-[progress_1s_ease-in-out_infinite]" />
-          </div>
-        </div>
-      )}
+    <div className="mx-auto min-h-screen max-w-md bg-slate-50 pb-28 text-slate-800 antialiased">
+      <style>{`
+        @keyframes chRise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+        @keyframes chSplash{from{opacity:0;transform:scale(.6) rotate(-8deg)}to{opacity:1;transform:none}}
+        @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+      `}</style>
+      <Splash />
 
-      {/* 2. TOP MOBILE APP BAR */}
-      <header className="sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-slate-200/80 px-4 py-3 flex items-center justify-between">
+      <header className="flex items-center justify-between px-4 pb-3 pt-6">
         <div className="flex items-center gap-2.5">
-          <CaihematLogo size={32} />
+          <CaihematLogo size={36} />
           <div>
-            <h1 className="text-base font-black tracking-tight text-slate-900 leading-none">Caihemat</h1>
-            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-600 mt-0.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
-              Live Sync Active
-            </span>
+            <p className="text-base font-bold leading-none tracking-tight text-slate-900">Caihemat</p>
+            <p className="mt-1 text-[11px] leading-none text-slate-400">Personal & Business Tracker</p>
           </div>
         </div>
-
         <div className="flex items-center gap-2">
           <button
             onClick={fetchData}
             title="Refresh Data"
-            className="p-2 rounded-xl text-slate-600 hover:bg-slate-100 transition-colors"
+            aria-label="Refresh"
+            className="grid h-10 w-10 place-items-center rounded-full bg-white text-slate-500 shadow-sm ring-1 ring-slate-100 transition active:scale-90"
           >
-            <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin text-emerald-600" : ""}`} />
+            <RefreshCw size={16} className={loading ? "animate-spin text-teal-600" : ""} />
           </button>
-          <Link
-            href="/logs"
-            className="p-2 rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors relative"
-            title="Webhook Logs"
+          <button
+            onClick={() => setSheet(true)}
+            aria-label="Transfer"
+            className="grid h-10 w-10 place-items-center rounded-full bg-white text-teal-600 shadow-sm ring-1 ring-slate-100 transition active:scale-90"
           >
-            <BellRing className="w-4 h-4 text-indigo-600" />
-            <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-indigo-500" />
-          </Link>
+            <ArrowLeftRight size={18} />
+          </button>
         </div>
       </header>
 
-      {/* 3. ALERT / NOTIFICATION MESSAGE */}
-      {message && (
-        <div className="mx-4 mt-3">
-          <div
-            className={`p-3 rounded-2xl flex items-center gap-2.5 text-xs font-semibold border shadow-sm animate-in fade-in slide-in-from-top-2 duration-300 ${
-              message.type === "success"
-                ? "bg-emerald-50 text-emerald-800 border-emerald-200"
-                : "bg-red-50 text-red-800 border-red-200"
-            }`}
-          >
-            {message.type === "success" ? (
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-            ) : (
-              <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
-            )}
-            <span className="flex-1">{message.text}</span>
-            <button onClick={() => setMessage(null)} className="text-slate-400 hover:text-slate-600 font-bold ml-1">
-              ✕
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* 4. MAIN CONTENT AREA (BY TAB) */}
-      <div className="p-4 space-y-5">
-        {/* TAB 1: HOME */}
-        {navTab === "HOME" && (
+      <main className="space-y-5 px-4">
+        {tab === "home" && (
           <>
-            {/* HERO BALANCE CARD */}
-            <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-emerald-600 via-teal-700 to-slate-900 p-5 text-white shadow-xl shadow-emerald-900/20">
-              <div className="absolute -right-6 -bottom-6 w-32 h-32 bg-white/10 rounded-full blur-2xl pointer-events-none" />
-
-              <div className="flex items-center justify-between text-emerald-200/90 text-xs font-semibold mb-1">
-                <span>Total Saldo Riil</span>
-                <span className="px-2 py-0.5 rounded-full bg-white/15 text-[10px] font-bold tracking-wider">
-                  5 DOMPET
-                </span>
-              </div>
-
-              <div className="text-3xl font-black tracking-tight mt-1">{formatIDR(totalBalance)}</div>
-
-              {/* Sub-metrics */}
-              <div className="grid grid-cols-2 gap-2 mt-4 pt-4 border-t border-white/15">
-                <div className="bg-white/10 backdrop-blur-sm rounded-xl p-2.5">
-                  <div className="flex items-center gap-1.5 text-emerald-300 text-[11px] font-semibold">
-                    <TrendingUp className="w-3.5 h-3.5" />
-                    <span>Omzet Jualan (QRIS)</span>
-                  </div>
-                  <div className="text-sm font-bold text-white mt-0.5">+{formatIDR(totalBusinessIncome)}</div>
-                </div>
-
-                <div className="bg-white/10 backdrop-blur-sm rounded-xl p-2.5">
-                  <div className="flex items-center gap-1.5 text-amber-300 text-[11px] font-semibold">
-                    <User className="w-3.5 h-3.5" />
-                    <span>Pengeluaran Pribadi</span>
-                  </div>
-                  <div className="text-sm font-bold text-white mt-0.5">-{formatIDR(totalPersonalExpense)}</div>
-                </div>
-              </div>
-            </div>
-
-            {/* WALLETS HORIZONTAL SCROLLER */}
-            <div>
-              <div className="flex items-center justify-between mb-2.5 px-0.5">
-                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">Akun & Dompet</h2>
-                <button
-                  onClick={() => setNavTab("TRANSFER")}
-                  className="text-xs font-bold text-emerald-600 hover:text-emerald-700 flex items-center gap-1"
-                >
-                  <ArrowLeftRight className="w-3 h-3" />
-                  <span>Transfer</span>
-                </button>
-              </div>
-
-              <div className="flex gap-2.5 overflow-x-auto pb-1 scrollbar-none snap-x">
-                {wallets.map((w) => (
-                  <div
-                    key={w.id}
-                    className="min-w-[125px] flex-1 p-3 rounded-2xl bg-white border border-slate-200/90 shadow-sm snap-start shrink-0"
-                  >
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 truncate">
-                        {w.name}
-                      </span>
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
-                    </div>
-                    <div className="text-sm font-extrabold text-slate-900 leading-tight">{formatIDR(w.balance)}</div>
-                    <span className="text-[9px] text-slate-400 font-semibold uppercase tracking-wider mt-1 block">
-                      {w.type}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* QUICK PREVIEW GRAFIK PENGELUARAN */}
-            <div className="bg-white rounded-3xl p-4 border border-slate-200/90 shadow-sm">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <div className="p-1.5 rounded-xl bg-orange-50 text-orange-600">
-                    <PieIcon className="w-4 h-4" />
-                  </div>
-                  <h3 className="text-xs font-bold text-slate-900">Analisis Pengeluaran</h3>
-                </div>
-                <button
-                  onClick={() => setNavTab("ANALYTICS")}
-                  className="text-[11px] font-bold text-emerald-600 hover:underline flex items-center gap-0.5"
-                >
-                  <span>Detail</span>
-                  <ChevronRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              <DonutChart
-                segments={chartSegments.slice(0, 4)}
-                totalAmount={totalExpenses}
-                formatIDR={formatIDR}
-                title="Beban Bulan Ini"
-              />
-            </div>
-
-            {/* TRANSACTIONS FEED WITH SMART QRIS CLASSIFIER */}
-            <div className="bg-white rounded-3xl p-4 border border-slate-200/90 shadow-sm space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-xs font-bold text-slate-900">Riwayat & Klasifikasi QRIS</h3>
-                  <p className="text-[10px] text-slate-500">Ketuk badge untuk ubah Jualan ⇄ Pribadi</p>
-                </div>
-
-                {/* Filter Pills */}
-                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
-                  <button
-                    onClick={() => setScopeFilter("ALL")}
-                    className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all ${
-                      scopeFilter === "ALL" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
-                    }`}
-                  >
-                    Semua
-                  </button>
-                  <button
-                    onClick={() => setScopeFilter("BUSINESS")}
-                    className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all ${
-                      scopeFilter === "BUSINESS" ? "bg-white text-emerald-700 shadow-sm" : "text-slate-500"
-                    }`}
-                  >
-                    Jualan
-                  </button>
-                  <button
-                    onClick={() => setScopeFilter("PERSONAL")}
-                    className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all ${
-                      scopeFilter === "PERSONAL" ? "bg-white text-amber-700 shadow-sm" : "text-slate-500"
-                    }`}
-                  >
-                    Pribadi
-                  </button>
-                </div>
-              </div>
-
-              {loading ? (
-                <div className="py-8 text-center text-xs text-slate-400">Memuat transaksi...</div>
-              ) : filteredTransactions.length === 0 ? (
-                <div className="py-8 text-center text-xs text-slate-400">Belum ada transaksi.</div>
-              ) : (
-                <div className="divide-y divide-slate-100">
-                  {filteredTransactions.map((tx) => (
-                    <div key={tx.id} className="py-3 flex items-center justify-between gap-3 group">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div
-                          className={`p-2 rounded-2xl shrink-0 ${
-                            tx.type === "INCOME"
-                              ? "bg-emerald-50 text-emerald-600"
-                              : tx.type === "EXPENSE"
-                              ? "bg-red-50 text-red-600"
-                              : "bg-blue-50 text-blue-600"
-                          }`}
-                        >
-                          {tx.type === "INCOME" ? (
-                            <ArrowDownLeft className="w-4 h-4" />
-                          ) : tx.type === "EXPENSE" ? (
-                            <ArrowUpRight className="w-4 h-4" />
-                          ) : (
-                            <ArrowLeftRight className="w-4 h-4" />
-                          )}
-                        </div>
-
-                        <div className="min-w-0">
-                          <div className="text-xs font-bold text-slate-900 truncate">
-                            {tx.description || (tx.type === "TRANSFER" ? `Transfer ➔ ${tx.destinationWallet?.name}` : tx.category?.name || "Transaksi")}
-                          </div>
-
-                          <div className="flex items-center gap-1.5 mt-1">
-                            {/* 1-Click Interactive Scope Badge */}
-                            <button
-                              onClick={() => handleToggleScope(tx)}
-                              disabled={isUpdatingScope}
-                              title="Klik untuk ubah status Jualan / Pribadi"
-                              className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-1 transition-all active:scale-95 ${
-                                tx.scope === "BUSINESS"
-                                  ? "bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
-                                  : "bg-amber-100 text-amber-800 hover:bg-amber-200"
-                              }`}
-                            >
-                              {tx.scope === "BUSINESS" ? (
-                                <>
-                                  <Building2 className="w-2.5 h-2.5" />
-                                  <span>Omzet Jualan</span>
-                                </>
-                              ) : (
-                                <>
-                                  <User className="w-2.5 h-2.5" />
-                                  <span>Pribadi</span>
-                                </>
-                              )}
-                            </button>
-
-                            {/* Category Tag (Click to change) */}
-                            {tx.category && (
-                              <button
-                                onClick={() => setSelectedTx(tx)}
-                                className="text-[9px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 truncate max-w-[110px]"
-                              >
-                                {tx.category.name}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="text-right shrink-0">
-                        <div
-                          className={`text-xs font-black ${
-                            tx.type === "INCOME"
-                              ? "text-emerald-600"
-                              : tx.type === "EXPENSE"
-                              ? "text-red-600"
-                              : "text-slate-900"
-                          }`}
-                        >
-                          {tx.type === "INCOME" ? "+" : tx.type === "EXPENSE" ? "-" : ""}
-                          {formatIDR(tx.amount)}
-                        </div>
-                        <div className="text-[9px] text-slate-400 mt-0.5">
-                          {tx.wallet?.name} • {new Date(tx.transactionDate).toLocaleDateString("id-ID", { day: "numeric", month: "short" })}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            <HeroCard total={total} omzet={omzet} personal={personal} />
+            <WalletSlider wallets={wallets} />
+            <DonutChart txs={txs} />
+            <TxList txs={txs} wallets={wallets} onToggle={toggleScope} limit={5} />
           </>
         )}
 
-        {/* TAB 2: ANALYTICS (VISUAL DONUT CHART & KATEGORI) */}
-        {navTab === "ANALYTICS" && (
-          <div className="space-y-4 animate-in fade-in duration-300">
-            <div className="bg-white rounded-3xl p-5 border border-slate-200/90 shadow-sm">
-              <h2 className="text-sm font-bold text-slate-900 mb-1">Visualisasi Pengeluaran</h2>
-              <p className="text-xs text-slate-500 mb-4">Analisis visual ke mana uang Anda mengalir bulan ini</p>
-
-              <DonutChart
-                segments={chartSegments}
-                totalAmount={totalExpenses}
-                formatIDR={formatIDR}
-                title="Total Beban"
-              />
-            </div>
-
-            {/* Quick Summary Cards */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-white p-4 rounded-2xl border border-slate-200/90 shadow-sm">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Omzet Usaha</span>
-                <div className="text-lg font-black text-emerald-600 mt-1">+{formatIDR(totalBusinessIncome)}</div>
-                <span className="text-[10px] text-slate-400">Total QRIS Masuk</span>
-              </div>
-
-              <div className="bg-white p-4 rounded-2xl border border-slate-200/90 shadow-sm">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-orange-700">Makan & Minum</span>
-                <div className="text-lg font-black text-slate-900 mt-1">
-                  -{formatIDR(categoryTotals["Makan & Minum"] || 0)}
-                </div>
-                <span className="text-[10px] text-slate-400">Resto & Cafe</span>
-              </div>
-            </div>
-          </div>
+        {tab === "analysis" && (
+          <>
+            <HeroCard total={total} omzet={omzet} personal={personal} />
+            <DonutChart txs={txs} />
+          </>
         )}
 
-        {/* TAB 3: TRANSFER ANTAR AKUN */}
-        {navTab === "TRANSFER" && (
-          <div className="bg-white rounded-3xl p-5 border border-slate-200/90 shadow-sm space-y-4 animate-in fade-in duration-300">
-            <div>
-              <h2 className="text-sm font-bold text-slate-900">Transfer Antar Akun</h2>
-              <p className="text-xs text-slate-500">Biaya admin otomatis tercatat sebagai Pengeluaran Pribadi</p>
+        {tab === "logs" && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between px-1">
+              <h2 className="text-sm font-semibold text-slate-700">Webhook Logs Android</h2>
+              <span className="text-[11px] font-semibold text-slate-400">{rawLogs.length} notifikasi</span>
             </div>
 
-            <form onSubmit={handleTransfer} className="space-y-3.5">
-              <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">Dari Akun (Sumber Potongan)</label>
-                <select
-                  value={transferSource}
-                  onChange={(e) => setTransferSource(e.target.value)}
-                  required
-                  className="w-full text-xs font-medium border border-slate-200 rounded-xl px-3 py-2.5 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                >
-                  <option value="">Pilih Sumber...</option>
-                  {wallets.map((w) => (
-                    <option key={w.id} value={w.id}>
-                      {w.name} (Saldo: {formatIDR(w.balance)})
-                    </option>
-                  ))}
-                </select>
+            {rawLogs.length === 0 ? (
+              <div className="rounded-2xl bg-white p-6 text-center text-sm text-slate-400">
+                Belum ada notifikasi webhook yang diterima dari MacroDroid.
               </div>
+            ) : (
+              <ul className="space-y-2">
+                {rawLogs.map((log) => (
+                  <li key={log.id} className="rounded-2xl bg-white p-3.5 shadow-sm ring-1 ring-slate-100 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-lg bg-indigo-50 text-indigo-700">
+                        <Smartphone size={11} /> {log.appName}
+                      </span>
+                      <span
+                        className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full ${
+                          log.status === "PARSED"
+                            ? "bg-emerald-100 text-emerald-800"
+                            : log.status === "IGNORED"
+                            ? "bg-slate-100 text-slate-600"
+                            : "bg-red-100 text-red-800"
+                        }`}
+                      >
+                        {log.status}
+                      </span>
+                    </div>
 
-              <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">Ke Akun (Tujuan Masuk)</label>
-                <select
-                  value={transferDest}
-                  onChange={(e) => setTransferDest(e.target.value)}
-                  required
-                  className="w-full text-xs font-medium border border-slate-200 rounded-xl px-3 py-2.5 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                >
-                  <option value="">Pilih Tujuan...</option>
-                  {wallets.map((w) => (
-                    <option key={w.id} value={w.id} disabled={w.id === transferSource}>
-                      {w.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+                    <p className="text-xs font-semibold text-slate-800">{log.notificationTitle}</p>
+                    <p className="text-[11px] font-mono bg-slate-50 p-2 rounded-lg text-slate-600 break-words">
+                      &quot;{log.notificationText}&quot;
+                    </p>
 
-              <div className="grid grid-cols-2 gap-2.5">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-700 mb-1">Nominal (Rp)</label>
-                  <input
-                    type="number"
-                    min="1"
-                    placeholder="50000"
-                    value={transferAmount}
-                    onChange={(e) => setTransferAmount(e.target.value)}
-                    required
-                    className="w-full text-xs border border-slate-200 rounded-xl px-3 py-2.5 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 font-semibold"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-700 mb-1">Biaya Admin (Rp)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    placeholder="1500"
-                    value={transferFee}
-                    onChange={(e) => setTransferFee(e.target.value)}
-                    className="w-full text-xs border border-slate-200 rounded-xl px-3 py-2.5 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 font-semibold"
-                  />
-                </div>
-              </div>
-
-              <div className="p-3 bg-amber-50/80 rounded-2xl border border-amber-200/60 text-[11px] text-amber-900 leading-relaxed">
-                💡 Biaya admin otomatis tercatat sebagai <strong>Pengeluaran Pribadi</strong> berkategori &quot;Biaya Admin&quot;, sehingga saldo akun sumber dipotong (Nominal + Admin).
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">Catatan (Opsional)</label>
-                <input
-                  type="text"
-                  placeholder="Misal: Top up DANA untuk jajan"
-                  value={transferNote}
-                  onChange={(e) => setTransferNote(e.target.value)}
-                  className="w-full text-xs border border-slate-200 rounded-xl px-3 py-2.5 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-2xl text-xs font-bold shadow-md shadow-emerald-500/20 transition-all active:scale-95 disabled:opacity-50"
-              >
-                {isSubmitting ? "Memproses..." : "Eksekusi Transfer"}
-              </button>
-            </form>
-          </div>
-        )}
-      </div>
-
-      {/* 5. MODAL RE-KLASIFIKASI KATEGORI TRANSAKSI */}
-      {selectedTx && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-3xl p-5 max-w-sm w-full shadow-2xl border border-slate-100 space-y-4 animate-in slide-in-from-bottom duration-300">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">Kelompokkan Transaksi</h3>
-                <p className="text-[11px] text-slate-500">{formatIDR(selectedTx.amount)}</p>
-              </div>
-              <button onClick={() => setSelectedTx(null)} className="text-slate-400 font-bold hover:text-slate-600">
-                ✕
-              </button>
-            </div>
-
-            <div className="space-y-2">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Tujuan Dana</span>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => handleToggleScope(selectedTx)}
-                  className={`p-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
-                    selectedTx.scope === "BUSINESS"
-                      ? "border-emerald-600 bg-emerald-50 text-emerald-800"
-                      : "border-slate-200 text-slate-600 hover:bg-slate-50"
-                  }`}
-                >
-                  <Building2 className="w-3.5 h-3.5" />
-                  <span>Omzet Jualan</span>
-                </button>
-
-                <button
-                  onClick={() => handleToggleScope(selectedTx)}
-                  className={`p-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
-                    selectedTx.scope === "PERSONAL"
-                      ? "border-amber-600 bg-amber-50 text-amber-800"
-                      : "border-slate-200 text-slate-600 hover:bg-slate-50"
-                  }`}
-                >
-                  <User className="w-3.5 h-3.5" />
-                  <span>Uang Pribadi</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Pilih Kategori</span>
-              <div className="grid grid-cols-2 gap-1.5">
-                {[
-                  "Makan & Minum",
-                  "Transportasi",
-                  "Belanja & Kebutuhan",
-                  "Penjualan QRIS",
-                  "Biaya Admin",
-                  "Operasional Usaha",
-                ].map((catName) => (
-                  <button
-                    key={catName}
-                    onClick={() => handleChangeCategory(catName)}
-                    className="p-2 rounded-xl text-left text-[11px] font-semibold border border-slate-100 bg-slate-50 hover:bg-emerald-50 hover:border-emerald-200 text-slate-700 transition-colors truncate"
-                  >
-                    {catName}
-                  </button>
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1">
+                      {log.parsedAmount ? (
+                        <span className="text-emerald-600 font-bold">Terekstrak: {rupiah(log.parsedAmount)}</span>
+                      ) : (
+                        <span>Info webhook</span>
+                      )}
+                      <span>
+                        {new Date(log.receivedAt).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                    </div>
+                  </li>
                 ))}
-              </div>
+              </ul>
+            )}
+
+            <div className="pt-2">
+              <TxList txs={txs} wallets={wallets} onToggle={toggleScope} />
             </div>
           </div>
+        )}
+      </main>
+
+      {toast && (
+        <div className="fixed left-1/2 top-6 z-[60] flex -translate-x-1/2 items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-xs font-medium text-white shadow-xl animate-[chRise_.3s_both]">
+          <Check size={14} className="text-emerald-400" />
+          {toast}
         </div>
       )}
 
-      {/* 6. BOTTOM APP NAVIGATION BAR (MOBILE FIRST) */}
-      <nav className="fixed bottom-0 left-0 right-0 z-40 max-w-lg mx-auto bg-white/95 backdrop-blur-md border-t border-slate-200/80 px-6 py-2.5 flex items-center justify-between shadow-lg">
-        <button
-          onClick={() => setNavTab("HOME")}
-          className={`flex flex-col items-center gap-1 text-[10px] font-bold transition-all ${
-            navTab === "HOME" ? "text-emerald-600 scale-105" : "text-slate-400 hover:text-slate-600"
-          }`}
-        >
-          <Wallet className="w-5 h-5" />
-          <span>Home</span>
-        </button>
-
-        <button
-          onClick={() => setNavTab("ANALYTICS")}
-          className={`flex flex-col items-center gap-1 text-[10px] font-bold transition-all ${
-            navTab === "ANALYTICS" ? "text-emerald-600 scale-105" : "text-slate-400 hover:text-slate-600"
-          }`}
-        >
-          <PieIcon className="w-5 h-5" />
-          <span>Grafik</span>
-        </button>
-
-        <button
-          onClick={() => setNavTab("TRANSFER")}
-          className={`flex flex-col items-center gap-1 text-[10px] font-bold transition-all ${
-            navTab === "TRANSFER" ? "text-emerald-600 scale-105" : "text-slate-400 hover:text-slate-600"
-          }`}
-        >
-          <ArrowLeftRight className="w-5 h-5" />
-          <span>Transfer</span>
-        </button>
-
-        <Link
-          href="/logs"
-          className="flex flex-col items-center gap-1 text-[10px] font-bold text-slate-400 hover:text-indigo-600 transition-all"
-        >
-          <BellRing className="w-5 h-5" />
-          <span>Logs</span>
-        </Link>
-      </nav>
-    </>
+      <TransferSheet
+        key={String(sheet)}
+        open={sheet}
+        wallets={wallets}
+        onClose={() => setSheet(false)}
+        onSubmit={doTransfer}
+      />
+      <BottomNav tab={sheet ? "transfer" : tab} onChange={handleTab} />
+    </div>
   );
 }
